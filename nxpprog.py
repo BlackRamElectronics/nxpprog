@@ -418,6 +418,8 @@ options:
     --baud=<baud> : set the baud rate.
     --xonxoff : enable xonxoff flow control.
     --control : use RTS and DTR to control reset and int0.
+    --gpio_rst : use this GPIO line for reset
+    --gpio_int : use this GPIO line for int0
     --addr=<image start address> : set the base address for the image.
     --verify : read the device after programming.
     --verifyonly : don't program, just verify.
@@ -431,7 +433,7 @@ options:
 """.format(os.path.basename(sys.argv[0])))
 
 class SerialDevice(object):
-    def __init__(self, device, baud, xonxoff=False, control=False):
+    def __init__(self, device, baud, xonxoff=False, control=False, gpio_reset=None, gpio_int=None):
         # Create the Serial object without port to avoid automatic opening
         self._serial = serial.Serial(port=None, baudrate=baud)
 
@@ -447,13 +449,24 @@ class SerialDevice(object):
         # or the device is in the wrong mode.
         # This timeout is too short for slow baud rates but who wants to
         # use them?
-        self._serial.setTimeout(5)
+        try:
+            self._serial.setTimeout(5)
+        except AttributeError:
+            self._serial.timeout = 5
+            
         # device wants Xon Xoff flow control
         if xonxoff:
             self._serial.setXonXoff(1)
 
         # reset pin is controlled by DTR implying int0 is controlled by RTS
-        self.reset_pin = "dtr"
+        if gpio_reset != None:
+            self.control_gpio
+            
+            
+            self.reset_pin = "dtr"
+        else:
+            self.reset_pin = gpio_reset
+            self.int_pin = gpio_int
 
         if control:
             self.isp_mode()
@@ -559,12 +572,14 @@ class UdpDevice(object):
         return line.decode("UTF-8", "ignore").replace('\r','').replace('\n','')
 
 class nxpprog:
-    def __init__(self, cpu, device, baud, osc_freq, xonxoff=False, control=False, address=None, verify=False):
+    def __init__(self, cpu, device, baud, osc_freq, xonxoff=False, control=False, address=None, verify=False, gpio_reset, gpio_int0):
         self.echo_on = True
         self.verify = verify
         self.OK = 'OK'
         self.RESEND = 'RESEND'
         self.sync_str = 'Synchronized'
+        self.gpio_reset = gpio_reset
+        self.gpio_int0 = gpio_int0
 
         # for calculations in 32 bit modulo arithmetic
         self.U32_MOD = (2 ** 32)
@@ -577,7 +592,7 @@ class nxpprog:
         if address:
             self.device = UdpDevice(address)
         else:
-            self.device = SerialDevice(device, baud, xonxoff, control)
+            self.device = SerialDevice(device, baud, xonxoff, control, gpio_reset, gpio_int)
 
         self.cpu = cpu
 
@@ -1182,6 +1197,8 @@ def main(argv=None):
     xonxoff = False
     start = False
     control = False
+    use_gpio_reset = False
+    use_gpio_int0 = False
     filetype = "autodetect"
     select_bank = False
     read = False
@@ -1227,6 +1244,21 @@ def main(argv=None):
             blank_check = True
         elif o == "--control":
             control = True
+        elif o == "--gpio_rst":
+            if a:
+                use_gpio_reset = True
+                gpio_num_reset = int(a, 0)
+            else:
+                panic("No GPIO line value given for reset")
+        elif o == "--gpio_int":
+            if a:
+                use_gpio_int0 = True
+                gpio_num_int0 = int(a, 0)
+            else:
+                panic("No GPIO line value given for int")
+        elif o == "--gpio_int":
+            use_gpio_int0 = True
+            gpio_num_int0 = int(a, 0)
         elif o == "--filetype":
             filetype = a
             if not ( filetype == "bin" or filetype == "ihex" ):
@@ -1293,7 +1325,7 @@ def main(argv=None):
     else:
         log("cpu=%s oscfreq=%d device=%s baud=%d" % (cpu, osc_freq, device, baud))
 
-    prog = nxpprog(cpu, device, baud, osc_freq, xonxoff, control, (device, port, mac) if udp else None, verify)
+    prog = nxpprog(cpu, device, baud, osc_freq, xonxoff, control, (device, port, mac) if udp else None, verify, gpio_num_reset if use_gpio_reset else None, gpio_num_int0 if use_gpio_int0 else None)
 
     if erase_only:
         prog.erase_all(verify)
