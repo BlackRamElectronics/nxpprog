@@ -427,7 +427,8 @@ options:
     --filetype=[ihex|bin] : set filetype to intel hex format or raw binary.
     --bank=[0|1] : select bank for devices with flash banks.
     --port=<udp port> : UDP port number to use (default 41825).
-    --mac=<mac address> : MAC address to associate IP address with.\
+    --mac=<mac address> : MAC address to associate IP address with.
+    --run : reset and run the new code.\
 """.format(os.path.basename(sys.argv[0])))
 
 class SerialDevice(object):
@@ -1164,6 +1165,12 @@ class nxpprog:
         id4 = self.dev_readline(.2)
         return ' '.join([id1, id2, id3, id4])
 
+    def reset_and_run(self):
+        self.device.reset(1)
+        time.sleep(.1)
+        self.device.reset(0)
+        time.sleep(.1)
+        return 0
 
 def main(argv=None):
     if argv is None:
@@ -1190,12 +1197,13 @@ def main(argv=None):
     udp = False
     port = -1
     mac = "" # "0C-1D-12-E0-1F-10"
+    run = False
 
     optlist, args = getopt.getopt(argv[1:], '',
             ['cpu=', 'oscfreq=', 'baud=', 'addr=', 'start=',
                 'filetype=', 'bank=', 'read=', 'len=', 'serialnumber',
                 'udp', 'port=', 'mac=', 'verify', 'verifyonly', 'blankcheck',
-                'xonxoff', 'eraseall', 'eraseonly', 'list', 'control'])
+                'xonxoff', 'eraseall', 'eraseonly', 'list', 'control', 'run'])
 
     for o, a in optlist:
         if o == "--list":
@@ -1253,6 +1261,8 @@ def main(argv=None):
             port = int(a)
         elif o == "--mac":
             mac = a
+        elif o == "--run":
+            run = True
         else:
             panic("Unhandled option: %s" % o)
 
@@ -1343,7 +1353,9 @@ def main(argv=None):
 
         if not verify_only:
             prog.start(flash_addr_base)
-
+    
+    if run:
+        prog.reset_and_run()
 
 if __name__ == '__main__':
     sys.exit(main())
