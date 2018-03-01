@@ -32,6 +32,11 @@ import serial # pyserial
 import socket
 import time
 
+try:
+    import RPi.GPIO as GPIO            # import RPi.GPIO module 
+except:
+    pass
+
 import ihex
 
 CMD_SUCCESS = 0
@@ -326,6 +331,12 @@ cpu_parms = {
             "devid": 0x0444102B,
             "flash_prog_buffer_size" : 1024
         },
+        "lpc1112" : {
+            "flash_sector" : flash_sector_lpc11xx,
+            "flash_prog_buffer_base" : 0x10000400,
+            "devid": 0x2524902B,
+            "flash_prog_buffer_size" : 1024
+        },
         # lpc18xx
         "lpc1817" : {
             "flash_sector" : flash_sector_lpc18xx,
@@ -399,6 +410,10 @@ def dump(name, str):
 
 def panic(str):
     log(str)
+    try:
+        GPIO.cleanup()
+    except:
+        pass
     sys.exit(1)
 
 
@@ -418,8 +433,8 @@ options:
     --baud=<baud> : set the baud rate.
     --xonxoff : enable xonxoff flow control.
     --control : use RTS and DTR to control reset and int0.
-    --gpio_rst : use this GPIO line for reset
-    --gpio_int : use this GPIO line for int0
+    --gpio_rst=<pin_num> : use this GPIO line for reset
+    --gpio_int=<pin_num> : use this GPIO line for int0
     --addr=<image start address> : set the base address for the image.
     --verify : read the device after programming.
     --verifyonly : don't program, just verify.
@@ -459,14 +474,21 @@ class SerialDevice(object):
             self._serial.setXonXoff(1)
 
         # reset pin is controlled by DTR implying int0 is controlled by RTS
-        if gpio_reset != None:
-            self.control_gpio
-            
-            
+        if gpio_reset == None:
+            self.control_gpio = False
             self.reset_pin = "dtr"
         else:
-            self.reset_pin = gpio_reset
-            self.int_pin = gpio_int
+            print("Using GPIO as control")
+            try:
+                self.control_gpio = True
+                self.reset_pin = gpio_reset
+                self.int_pin = gpio_int
+                GPIO.setmode(GPIO.BCM)             # choose BCM or BOARD  
+                GPIO.setup(self.reset_pin, GPIO.OUT)    # reset GPIO24 as an output 
+                GPIO.setup(self.int_pin, GPIO.OUT)    # reset GPIO24 as an output 
+            except Exception as e:
+                print(e)
+                panic("Set to use GPIO but not availalbe")
 
         if control:
             self.isp_mode()
@@ -477,35 +499,56 @@ class SerialDevice(object):
     # this is of course only possible if the signals are connected in
     # this way
     def isp_mode(self):
-        self.reset(0)
-        time.sleep(.1)
-        self.reset(1)
-        self.int0(1)
-        time.sleep(.1)
-        self.reset(0)
-        time.sleep(.1)
-        self.int0(0)
+        # None GPIO controls are inverted
+        if self.control_gpio != False
+            self.reset(1)
+            time.sleep(.1)
+            self.reset(0)
+            self.int0(0)
+            time.sleep(.1)
+            self.reset(1)
+            time.sleep(.1)
+            self.int0(1)
+        else
+            self.reset(0)
+            time.sleep(.1)
+            self.reset(1)
+            self.int0(1)
+            time.sleep(.1)
+            self.reset(0)
+            time.sleep(.1)
+            self.int0(0)
 
     def reset(self, level):
-        if self.reset_pin == "rts":
-            self._serial.setRTS(level)
+        if self.control_gpio == True:
+            GPIO.output(self.reset_pin, level)
         else:
-            self._serial.setDTR(level)
+            if self.reset_pin == "rts":
+                self._serial.setRTS(level)
+            else:
+                self._serial.setDTR(level)
 
     def int0(self, level):
-        # if reset pin is rts int0 pin is dtr
-        if self.reset_pin == "rts":
-            self._serial.setDTR(level)
+        if self.control_gpio == True:
+            GPIO.output(self.int_pin, level)
         else:
-            self._serial.setRTS(level)
+            # if reset pin is rts int0 pin is dtr
+            if self.reset_pin == "rts":
+                self._serial.setDTR(level)
+            else:
+                self._serial.setRTS(level)
 
     def write(self, data):
         self._serial.write(data)
 
     def readline(self, timeout=None):
         if timeout:
-            ot = self._serial.getTimeout()
-            self._serial.setTimeout(timeout)
+            try:
+                ot = self._serial.getTimeout()
+                self._serial.setTimeout(timeout)
+            except:
+                ot = self._serial.timeout
+                self._serial.timeout = timeout
 
         line = b''
         while True:
@@ -525,7 +568,10 @@ class SerialDevice(object):
             line += c
 
         if timeout:
-            self._serial.setTimeout(ot)
+            try:
+                self._serial.setTimeout(ot)
+            except:
+                self._serial.timeout = ot
 
         return line.decode("UTF-8", "ignore")
 
@@ -572,7 +618,7 @@ class UdpDevice(object):
         return line.decode("UTF-8", "ignore").replace('\r','').replace('\n','')
 
 class nxpprog:
-    def __init__(self, cpu, device, baud, osc_freq, xonxoff=False, control=False, address=None, verify=False, gpio_reset, gpio_int0):
+    def __init__(self, cpu, device, baud, osc_freq, xonxoff=False, control=False, address=None, verify=False, gpio_reset=None, gpio_int0=None):
         self.echo_on = True
         self.verify = verify
         self.OK = 'OK'
@@ -592,7 +638,7 @@ class nxpprog:
         if address:
             self.device = UdpDevice(address)
         else:
-            self.device = SerialDevice(device, baud, xonxoff, control, gpio_reset, gpio_int)
+            self.device = SerialDevice(device, baud, xonxoff, control, gpio_reset, gpio_int0)
 
         self.cpu = cpu
 
@@ -1212,7 +1258,7 @@ def main(argv=None):
             ['cpu=', 'oscfreq=', 'baud=', 'addr=', 'start=',
                 'filetype=', 'bank=', 'read=', 'len=', 'serialnumber',
                 'udp', 'port=', 'mac=', 'verify', 'verifyonly', 'blankcheck',
-                'xonxoff', 'eraseall', 'eraseonly', 'list', 'control'])
+                'xonxoff', 'eraseall', 'eraseonly', 'list', 'control', 'gpio_rst=', 'gpio_int='])
 
     for o, a in optlist:
         if o == "--list":
@@ -1256,9 +1302,6 @@ def main(argv=None):
                 gpio_num_int0 = int(a, 0)
             else:
                 panic("No GPIO line value given for int")
-        elif o == "--gpio_int":
-            use_gpio_int0 = True
-            gpio_num_int0 = int(a, 0)
         elif o == "--filetype":
             filetype = a
             if not ( filetype == "bin" or filetype == "ihex" ):
@@ -1376,6 +1419,11 @@ def main(argv=None):
         if not verify_only:
             prog.start(flash_addr_base)
 
+
+    try:
+        GPIO.cleanup()
+    except:
+        pass
 
 if __name__ == '__main__':
     sys.exit(main())
