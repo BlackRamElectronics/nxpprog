@@ -501,7 +501,7 @@ class SerialDevice(object):
     # this way
     def isp_mode(self):
         # None GPIO controls are inverted
-        if self.control_gpio != False
+        if self.control_gpio != False:
             self.reset(1)
             time.sleep(.1)
             self.reset(0)
@@ -510,7 +510,7 @@ class SerialDevice(object):
             self.reset(1)
             time.sleep(.1)
             self.int0(1)
-        else
+        else:
             self.reset(0)
             time.sleep(.1)
             self.reset(1)
